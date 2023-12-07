@@ -1,0 +1,345 @@
+<drac2>
+pref = ctx.prefix
+al = ctx.alias
+cmd = pref+al
+null = ''
+nl = '\n'
+comma = ','
+
+currency_str = 'gp'
+item_found = False
+c = combat()
+bag = load_json(get('bags'))
+footer = f'{cmd} help | made by @alpha983'
+cargo_type_item_count = round(float(get_svar('cargoCount', 5)))
+materials_bag_name = 'Cargo'
+channel = str(ctx.channel)
+channel_whitelist = get_svar('channelWhitelist', 'trade')
+args_list = &ARGS&
+inp  = "&*&".lower().replace('\'', '').replace('"', '')
+inp1 = "&1&".replace('\'', '').replace('"', '')
+inp2 = "&2&".replace('\'', '').replace('"', '')
+inp3 = "&3&".replace('\'', '').replace('"', '')
+inp4 = "&4&".replace('\'', '').replace('"', '')
+inp5 = "&5&".replace('\'', '').replace('"', '')
+null = ''
+
+using(trade = 'b1647e19-4e91-46ed-8ac0-da5c0e1cf106')
+
+default_trade_svar = {
+    "cargo": {
+        "non perishable": "Art Object, Bricks, Canvas, Clockworks, Cloth, Corals, Cotton, Essence, Furniture, Glassware, Hay, Hemp, Jewellery, Leather, Marble slabs, Copper, Gold, Iron, Silver, Pearls, Pigments, Pitch, Porcelain, Silk, Spices, Stone slabs, Tobacco, Wood planks, Wool",
+
+        "perishable": "Ale, Cheese, Coffee, Dried Fruits, Apple, Banana, Chestnut, Olive, Pear, Strawberry, Flour, Fur, Grain, Herbs, Honey, Rice, Salt, Salted Meat, Spirits, Sugar, Tea, Vegetables, Wheat, Wine",
+
+        "livestock": "Guard Dog, War Dog, Labor Elephant, War Elephant, Trained Falcon, Boar, Bull, Cow, Goat, Goose, Pig, Pigeon, Rabbit, Sheep, Camel, Draft horse, Riding horse, War horse, Pony, Ox, Pigeon"
+    },
+
+    "locations": [["port town", "1d4", 0], ["village", "2d6", 150], ["hamlet", "2d8", 250], ["ore mines", "1d10", 350], ["city", "2d4", 450], ["metropolis", "1d12", 550]],
+
+    "prices": {
+        "non perishable": {"base price": 50, "modifier": "d100", "currency": "gp", "qty": "10d20"},
+        "perishable": {"base price": 20, "modifier": "d25", "currency": "gp", "qty": "10d10"},
+        "livestock": {"base price": 45, "modifier": "d60", "currency": "gp", "qty": "10d6"}
+    }
+}
+default_trade_metadata = {
+    "cargo": {},
+    "market_rolled": False,
+    "rolled_today": False
+}
+default_trade_cvar = {
+    "current_location": "port town"
+}
+
+title = f'{name} needs help managing their cargo!'
+desc = f'''__Possible Inputs__:
+`{cmd} location`: To view the list of locations you can travel to.
+`{cmd} market`: To check the market goods and their prices sold in the current location
+
+**Trading**:
+`{cmd} buy <item> [qty]`: To buy from the cargo markets
+`{cmd} sell <item> [qty]`: To sell to the cargo markets
+
+`{cmd} tip`: Provides insider trading information tips
+
+__For Server Admins or users with the role: “Server Aliaser” or “Dragonspeaker”__
+`{cmd} setup`: To view advanced customization options
+
+Inputs within`<>` are mandatory
+Inputs within `[]` are optional'''
+
+if inp in 'help?':
+    return f'embed -title "{title}" -desc "{desc}" -thumb {image} -footer "{footer}" -color {color}'
+elif inp in 'setup':
+    title = f'{name} needs help building their economy!'
+    desc = trade.help_desc
+    return f'embed -title "{title}" -desc "{desc}" -thumb {image} -footer "{footer}" -color {color}'
+if not c:
+    title = 'This channel needs to be in combat for this command to work!'
+    desc = f'Please start combat using `{pref}i begin` and then run this command!'
+    return f'embed -title "{title}" -desc "{desc}" -thumb {image} -footer "{footer}" -color {color}'
+
+# Load SVAR market cooldown
+market_cooldown  = get_svar('marketRefresh', '604800') # default: 1 week * seconds
+market_cooldown = int(market_cooldown) if market_cooldown.isdigit() else 604800
+
+# Load SVAR trade data
+trade_svar  = load_json(get_svar('trade', dump_json(default_trade_svar)))
+
+# Load metadata trade data
+trade_metadata = load_json(c.get_metadata('trade', dump_json(default_trade_metadata)))
+
+# Load CVAR trade data
+trade_cvar = load_json(character().get_cvar('trade', dump_json(default_trade_cvar)))
+
+#Init List of locations
+location_list = []
+for i in trade_svar["locations"]:
+    location_list.append(i[0])
+
+
+# Market Price/Cooldown Initialization
+port_time_display = f'__Nautical Time at Port__:\n📅 **<t:{int(time())}:D>**\n:clock1: **<t:{int(time())}:t>**'
+
+if "rolled_today" in trade_metadata:
+    trade_metadata.pop("rolled_today")
+    trade_metadata.pop("market_rolled")
+    trade_metadata["cargo"] = {}
+    character().delete_cvar('trade')
+
+diff = time() - trade_metadata["last_rolled"] if "last_rolled" in trade_metadata else 0
+
+if not trade_metadata["cargo"] or diff > market_cooldown:
+    trade_metadata["last_rolled"] = time()
+    for i in range(len(trade_svar["locations"])):   #Init empty dicts for all locations
+        trade_metadata["cargo"][trade_svar["locations"][i][0]] = {}
+
+    for location in trade_svar["locations"]:
+        for cargo_type in trade_svar["cargo"]: #Iterate through cargo type keys
+            price_data = trade_svar["prices"][cargo_type]
+            cargo_unpack = trade_svar["cargo"][cargo_type].split(', ') #Unpack all cargo into a list separating by comma
+            cargo_pool = []
+            while len(cargo_pool) < cargo_type_item_count: #Limit items of each cargo_type
+                rr = randint(len(cargo_unpack))
+                if cargo_unpack[rr] not in cargo_pool:
+                    # Calculate buying price
+                    buying_price = price_data["base price"] + roll(price_data["modifier"])
+                    
+                    # Ensure selling price is lower than buying price
+                    selling_price_modifier = roll(location[1])  # This could be a random value or a fixed percentage
+                    selling_price = max(buying_price - selling_price_modifier, 1)  # Ensure selling price is at least 1
+
+                    t = {
+                        cargo_unpack[rr]: {
+                            "bP": buying_price,
+                            "sP": selling_price,
+                            "type": cargo_type,
+                            "currency": price_data["currency"],
+                            "qty": roll(price_data["qty"])
+                        }
+                    }
+                    trade_metadata["cargo"][location[0]].update(t)
+                    cargo_pool.append(cargo_unpack[rr])
+
+## CARGO
+current_location = trade_cvar["current_location"]
+
+if not channel_whitelist in channel:
+    title = f'{name}, {cmd} cannot be used in this channel!'
+    desc = f'''Please use `{cmd}` in a channel where the channel\'s name contains the below word:
+```
+{channel_whitelist}
+```
+For example: #trade-channel
+This is to consolidate all trade in a single channel as `{cmd}` requires the channel to be in combat at all times. This alias makes use of init metadata to keep market prices uniform among all players.\n\nIf you are an admin, you can customize this with the `channelWhitelist` SVAR.\n\n:warning: Please see `{cmd} setup` for more advanced customization instructions.
+    '''
+elif inp1 == 'location':
+    title = 'Please mention the location you want to travel to!'
+    desc = f'For eg: `!trade location \\\"{location_list[0]}\\\"`\n\n__Possible Locations__:\n`{nl.join(location_list)}`\n\n :warning: Use double-quotes to enclose locations with more words than one. Verify using `!quotes` to ensure you\'re using the right kind of quotes.'
+    location_sub_text_search = [match2 for match2 in location_list if inp2 in match2]
+    if location_sub_text_search:
+        travel_from = trade_cvar["current_location"]
+        trade_cvar["current_location"] = travel_to = location_sub_text_search[0]
+        for loc in trade_svar["locations"]:
+            if travel_from == loc[0]:
+                a = loc[2]
+            if travel_to == loc[0]:
+                b = loc[2]
+        dist = abs(round(sqrt(a*a + b*b))) if travel_from != travel_to else 0
+        title = f'{name} travels towards {travel_to.title()} from {travel_from.title()}!'
+        desc = f'**{travel_from.title()}** --> :sailboat: :horse_racing: --> **{travel_to.title()}**'
+    elif not inp2:
+        title = f'Invalid Location!'
+        desc = f'Please use `{al} location` to list all possible locations and make sure your input is an exact match of an existing location!'
+elif inp1 == 'tip':
+    tip_text = False
+    for location_cargo_pool in trade_metadata["cargo"]:
+        if trade_cvar["current_location"] == location_cargo_pool:
+            continue
+        for cargo_current in trade_metadata["cargo"][trade_cvar["current_location"]]:
+            for cargo_compare in trade_metadata["cargo"][location_cargo_pool]:
+                if cargo_current == cargo_compare:
+                    if trade_metadata["cargo"][trade_cvar["current_location"]][cargo_current]["bP"] < trade_metadata["cargo"][location_cargo_pool][cargo_compare]["sP"]:
+                        tip_text = f'The port captain whispers to you that the merchants at **{location_cargo_pool.title()}** are paying top coin for **{cargo_compare}** which can be found for a steal at the markets here at **{trade_cvar["current_location"].title()}**!'
+                        break
+                    elif trade_metadata["cargo"][trade_cvar["current_location"]][cargo_current]["bP"] > trade_metadata["cargo"][location_cargo_pool][cargo_compare]["sP"]:
+                        tip_text = f'The port captain whispers to you that the merchants here at **{trade_cvar["current_location"].title()}** are paying top coin for **{cargo_compare}** which can be found for a steal at the markets over at **{location_cargo_pool.title()}**!'
+                        break
+    title = f'{name} palms in some coin to the port captain for some insider trading information!'
+    if tip_text:
+        desc = tip_text
+    else:
+        desc = f'Tough luck, the markets seem a bit dry at the moment. Not much action happening, unfortunately.'
+elif inp1 == 'market':
+    location_cargo = trade_metadata["cargo"][current_location]
+    title = f'{name} is managing their cargo!'
+    desc = f'**Trading**:\n`{cmd} buy <item> [qty]`: To buy from the cargo markets\n`{cmd} sell <item> [qty]`: To sell to the cargo markets\n\nInputs within`<>` are mandatory for the alias to work\nInputs within `[]` are optional'
+
+    title = f'{current_location.title()}\' market ⚖️' if current_location.endswith('s') else f'{current_location.title()}\'s market ⚖️'
+
+    # Table Formatting
+    cargo_list = list(location_cargo.keys())
+    stock_list = []
+    buy_list = []
+    sell_list = []
+    for cargo_name in cargo_list:
+        stock_list.append(str(location_cargo[cargo_name]["qty"]))
+        buy_list.append(str(location_cargo[cargo_name]["bP"])+location_cargo[cargo_name]["currency"])
+        sell_list.append(str(location_cargo[cargo_name]["sP"])+location_cargo[cargo_name]["currency"])
+    longest_stock = max(len(i) for i in stock_list)
+    longest_cargo = max(len(i) for i in cargo_list)
+    longest_buy = max(len(i) for i in buy_list)
+    longest_sell = max(len(i) for i in sell_list)
+    stock_divider = cargo_divider = buy_divider = sell_divider = ''
+    for i in range(longest_stock+2):
+        stock_divider += '-'
+    for i in range(longest_cargo+1):
+        cargo_divider += '-'
+    for i in range(longest_buy+2):
+        buy_divider += '-'
+    for i in range(longest_sell+2):
+        sell_divider += '-'
+    stock_divider = '|'+stock_divider
+    cargo_divider = '|'+cargo_divider
+    buy_divider = '|'+buy_divider
+    sell_divider = '|'+sell_divider+'|'
+    stock_table, cargo_table, buy_table, sell_table = [f'| {"Qty":<{longest_stock}} |'], [f' {"Cargo":<{longest_cargo}}|'], [f' {"Buy":^{longest_buy}} |'], [f' {"Sell":^{longest_sell}} |']
+    stock_table.append(stock_divider)
+    cargo_table.append(cargo_divider)
+    buy_table.append(buy_divider)
+    sell_table.append(sell_divider)
+    for i in stock_list:
+        stock_table.append(f'| {i:<{longest_stock}} |')
+    for i in cargo_list:
+        cargo_table.append(f' {i:<{longest_cargo}}|')
+    for i in buy_list:
+        buy_table.append(f' {i:^{longest_buy}} |')
+    for i in sell_list:
+        sell_table.append(f' {i:^{longest_sell}} |')
+    full_list = []
+    for i in range(len(cargo_list)+2):
+        table_row = stock_table[i]+cargo_table[i]+buy_table[i]+sell_table[i]
+        full_list.append(table_row)
+    full_table = '\n'.join(full_list)
+    border = ''
+    for i in range(len(table_row)):
+        border += '+' 
+    desc = f'{port_time_display}\n\nTable below is best displayed on a wide screen.\n:warning: **On mobile, landscape orientation is highly recomended**```\n{border}\n{full_table}\n{border}\n```'
+    desc +=f'''
+    - Buy : `{cmd} buy <item> [qty]`: This action buys the specified item from the market and adds it to your `{pref}bag Cargo`. This will also deduct the buy price from your coin pouch. (Note: Buying a lot of the same item will drive its price up :chart_with_upwards_trend: )`
+
+    - Sell : `{cmd} sell <item> [qty]`: This action sells the specified item from your `{pref}bag Cargo` and adds it to the market. This will also add the sell price to your coin pouch. (Note: Selling a lot of the same item will drive its price down :chart_with_downwards_trend: )`
+
+    '''
+elif inp1 in ['buy', 'sell']:
+    if not trade_metadata['cargo']:
+        title = f'Please make sure you have used `{cmd} market` first to initialize and setup the markets before buying/selling anything!'
+        desc = ''
+    elif inp2 in trade_metadata['cargo'][current_location]:
+        if inp1 == 'buy':  # Trade Buy
+            qty = int(inp3) if len(args_list) >= 3 else 1
+            total_price = 0
+            stock = trade_metadata['cargo'][current_location][inp2]['qty']
+
+            if qty <= stock:
+                # Find the location modifier for the current location
+                location_modifier = None
+                for location in trade_svar["locations"]:
+                    if location[0] == current_location:
+                        location_modifier = location[1]
+                        break
+                
+                if location_modifier is not None:
+                    for _ in range(qty):
+                        current_price = trade_metadata['cargo'][current_location][inp2]['bP']
+                        total_price += current_price
+                        price_increase = roll(location_modifier)
+                        trade_metadata['cargo'][current_location][inp2]['bP'] += price_increase
+                        trade_metadata['cargo'][current_location][inp2]['sP'] += price_increase
+
+                    price_str = f"{total_price}{currency_str}"
+                    loot_display = inp2
+                    currency_denom = {"cp":100,"sp":10,"ep":2,"gp":1,"pp":0.1}
+                    price_to_gp = total_price / currency_denom[currency_str]
+
+                    if character().coinpurse.total >= price_to_gp:
+                        character().coinpurse.modify_coins(**{currency_str: -total_price})
+                        trade.add_item_to_bag(bag, materials_bag_name, inp2, qty)
+                        trade_metadata['cargo'][current_location][inp2]['qty'] -= qty
+                        title = f'{name} makes a purchase!'
+                        desc = f'🎒 The merchant hands over **{qty}x{loot_display}**. It\'s added to your `!bag {materials_bag_name}` pouch!\n💰 You pay **{price_str}** in exchange!'
+                    else:
+                        title = 'Insufficient funds to complete transaction!'
+                        desc = f'You need {price_str} to purchase **{qty}x{loot_display}**, but you only have **{round(character().coinpurse.total, 2)}gp**. Please come back later with enough coin.'
+                else:
+                    title = 'Error!'
+                    desc = f'No modifier found for {current_location}. Please check the location settings.'
+            else:
+                title = 'Not enough stock in the cargo markets!'
+                desc = 'Please try again later after the markets restock, or reduce your order quantity.'
+        elif inp1 == 'sell':  # Trade Sell
+            qty = int(inp3) if len(args_list) >= 3 else 1
+            item_input = item_being_sold = inp2
+
+            trade.remove_item_from_bag(bag, item_being_sold, qty)
+
+            # Find the location modifier for the current location
+            location_modifier = None
+            for location in trade_svar["locations"]:
+                if location[0] == current_location:
+                    location_modifier = location[1]
+                    break
+
+            location_modifier = randchoice(['1d4', '1d2', '1d6']) if not location_modifier else location_modifier
+            if location_modifier:
+                total_price = trade_metadata['cargo'][current_location][inp2]['sP'] * qty
+
+                for _ in range(qty):
+                    price_decrease = roll(location_modifier)
+                    new_sP = trade_metadata['cargo'][current_location][inp2]['sP'] - price_decrease
+                    new_bP = trade_metadata['cargo'][current_location][inp2]['bP'] - price_decrease
+
+                    if new_sP > 0 and new_bP > 0:
+                        trade_metadata['cargo'][current_location][inp2]['sP'] = new_sP
+                        trade_metadata['cargo'][current_location][inp2]['bP'] = new_bP
+                    else:
+                        break
+
+                final_price = trade_metadata['cargo'][current_location][inp2]['sP'] * qty
+                price_str = f"{final_price}{currency_str}"
+                character().coinpurse.modify_coins(**{currency_str: +final_price})
+                trade_metadata['cargo'][current_location][inp2]['qty'] += qty
+
+                title = f'{name} sells their {item_being_sold} to {current_location}\'s cargo markets!'
+                desc = f'{name} makes a transaction!\n\n:warning: __Automatic Changes:__\n🎒 **{qty} {item_being_sold}** was removed from your `{pref}bag {materials_bag_name}` pouch!\n💰 Your **{price_str}** was added to your `{pref}coins` pouch.'
+    else:
+        title = 'Apologies! The item you\'re trying to trade is not found within the cargo markets!'
+        desc = 'Please make sure there are no typing errors and try again!\n**All inputs are case sensitive**.'
+
+c.set_metadata('trade', dump_json(trade_metadata))
+character().set_cvar('bags', dump_json(bag))
+character().set_cvar('trade', dump_json(trade_cvar))
+
+return f'embed -title "{title}" -desc "{desc}" -thumb {image} -footer "{footer}" -color {color}'
+</drac2>
